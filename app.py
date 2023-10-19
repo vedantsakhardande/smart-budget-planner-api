@@ -5,6 +5,7 @@ from datetime import datetime
 import pytz
 from decouple import config
 from flasgger import Swagger
+import bcrypt
 
 app = Flask(__name__)
 swagger = Swagger(app)
@@ -24,7 +25,106 @@ mongo = MongoClient(app.config['MONGO_URI'])
 
 # Access a specific database and collection
 db = mongo.get_database('smart-budget-planner')
-collection = db['transactions']
+
+@app.route('/signup', methods=['POST'])
+def signup():
+    """
+    Register a new user.
+
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: username
+        in: formData
+        type: string
+        required: true
+        description: Username for the new user
+      - name: password
+        in: formData
+        type: string
+        required: true
+        description: Password for the new user
+    responses:
+      201:
+        description: User registered successfully.
+      400:
+        description: Username already exists.
+      500:
+        description: Internal Server Error.
+    """
+    try:
+        collection = db['users']
+        
+        # Get username and password from request body
+        username = request.json.get('username')
+        password = request.json.get('password')
+
+        # Check if the username already exists
+        existing_user = collection.find_one({'username': username})
+        if existing_user:
+            return jsonify({'message': 'Username already exists', 'status': 400}), 400
+
+        # Hash the password using bcrypt
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
+        # Store the user's data in the database with the hashed password
+        user_data = {'username': username, 'password': hashed_password}
+        collection.insert_one(user_data)
+
+        return jsonify({'message': 'Signup successful', 'status': 201}), 201
+
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 500}), 500
+
+@app.route('/login', methods=['POST'])
+def login():
+    """
+    Authenticate a user.
+
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: username
+        in: formData
+        type: string
+        required: true
+        description: Username of the user
+      - name: password
+        in: formData
+        type: string
+        required: true
+        description: Password of the user
+    responses:
+      200:
+        description: Login successful.
+      403:
+        description: Invalid username or password.
+      500:
+        description: Internal Server Error.
+    """
+    try:
+        collection = db['users']
+        
+        # Get username and password from request body
+        username = request.json.get('username')
+        password = request.json.get('password')
+
+        # Find user by username
+        user = collection.find_one({'username': username})
+
+        if user:
+            # Check if the provided password matches the stored hashed password
+            if bcrypt.checkpw(password.encode('utf-8'), user['password']):
+                return jsonify({'message': 'Login successful', 'status': 200}), 200
+
+        # Authentication failed
+        return jsonify({'message': 'Invalid username or password', 'status': 403}), 403
+
+    except Exception as e:
+        return jsonify({'error': str(e), 'status': 500}), 500
+
 
 
 @app.route('/transactions', methods=['GET'])
@@ -33,6 +133,8 @@ def get_transactions():
     Get transactions within a date range.
 
     ---
+    tags:
+      - Transactions
     parameters:
       - name: from
         in: query
@@ -71,6 +173,7 @@ def get_transactions():
         description: Internal Server Error.
     """
     try:
+        collection = db['transactions']
         # Get the 'from' and 'to' date parameters from the query string
         from_date = request.args.get('from')
         to_date = request.args.get('to')
@@ -104,6 +207,8 @@ def create_transaction():
     Create a new transaction.
 
     ---
+    tags:
+      - Transactions
     parameters:
       - name: transaction_data
         in: body
@@ -131,6 +236,7 @@ def create_transaction():
         description: Internal Server Error.
     """
     try:
+        collection = db['transactions']
         # Get the transaction data from the request JSON
         transaction_data = request.get_json()
         transaction_data['timestamp'] = datetime.now()
@@ -147,4 +253,4 @@ def create_transaction():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=True)
