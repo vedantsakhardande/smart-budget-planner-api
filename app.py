@@ -1,11 +1,13 @@
 import os
+import jwt
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from decouple import config
 from flasgger import Swagger
 import bcrypt
+import secrets
 
 app = Flask(__name__)
 swagger = Swagger(app)
@@ -25,6 +27,35 @@ mongo = MongoClient(app.config['MONGO_URI'])
 
 # Access a specific database and collection
 db = mongo.get_database('smart-budget-planner')
+
+def validate_access_token(token):
+    decoded_token = jwt.decode(token, options={"verify_signature": False})
+        
+    print("Decoded token is :",decoded_token)
+    # Extract the expiration timestamp from the decoded token (standard claim: 'exp')
+    expiration_timestamp = decoded_token['exp']
+    
+    # Convert the timestamp to a datetime object
+    expiration_datetime = datetime.utcfromtimestamp(expiration_timestamp)
+    
+    # Compare with the current time (UTC)
+    current_datetime = datetime.utcnow()
+
+    print("expiration_datetime", expiration_datetime)
+    print("datetime.utcnow()", datetime.utcnow())
+    
+    # If the token has not expired, return False; otherwise, return True
+    return expiration_datetime > current_datetime
+
+@app.before_request
+def before_request():
+    if request.endpoint == 'login':
+        return  # Skip access token validation for the /login route
+    # Validate the access token for each request
+    token = request.headers.get('Authorization').split(' ')[1]
+    print("token is :",token)
+    if not validate_access_token(token):
+        return jsonify({"error": "Unauthorized"}), 401
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -110,14 +141,21 @@ def login():
         # Get username and password from request body
         username = request.json.get('username')
         password = request.json.get('password')
-
         # Find user by username
         user = collection.find_one({'username': username})
-
+        
         if user:
             # Check if the provided password matches the stored hashed password
             if bcrypt.checkpw(password.encode('utf-8'), user['password']):
-                return jsonify({'message': 'Login successful', 'status': 200}), 200
+                # Set the expiration time for the JWT (24 hours from the current time)
+                expiration_time = datetime.utcnow() + timedelta(hours=24)
+
+                print("User is :",user)
+                # Create a JWT containing the username and an "exp" (expiration) claim
+                access_token = jwt.encode({'username': username, 'name': user.get('name'), 'exp': expiration_time}, 'your_secret_key', algorithm='HS256')
+
+                # Return the access token in the response
+                return jsonify({"access_token": access_token, "message": "Login successful"}), 200
 
         # Authentication failed
         return jsonify({'message': 'Invalid username or password', 'status': 403}), 403
@@ -191,7 +229,6 @@ def get_transactions():
 
         # Use the query to retrieve transactions in the specified date range
         transactions_in_range = list(collection.find(query))
-
         # Convert ObjectId fields to strings
         for transaction in transactions_in_range:
             transaction['_id'] = str(transaction['_id'])
