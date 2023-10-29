@@ -18,7 +18,7 @@ jobs:
 
       - name: Deploy to PythonAnywhere
         run: |
-          git remote add pythonanywhere https://git.pythonanywhere.com/vedanttest19/mysite.git
+          git remote add pythonanywhere https://www.pythonanywhere.com/user/vedanttest19/files/home/vedanttest19/mysite
           git push pythonanywhere main
         env:
           PA_USERNAME: ${{ secrets.PA_USERNAME }}
