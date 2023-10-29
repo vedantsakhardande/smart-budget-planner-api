@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 from decouple import config
 from flasgger import Swagger
+import git
 import bcrypt
 import secrets
 import pandas as pd
@@ -450,4 +451,4 @@ def create_transaction():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=80, debug=True)
