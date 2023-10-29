@@ -56,7 +56,16 @@ def before_request():
             return jsonify({"error": "Unauthorized"}), 401
     else:
         return  # Skip access token validation for the /login route   
-  
+
+
+@app.route('/git_update', methods=['POST'])
+def git_update():
+    repo = git.Repo('./smart-budget-planner-api')
+    origin = repo.remotes.origin
+    repo.create_head('main',
+                     origin.refs.main).set_tracking_branch(origin.refs.main).checkout()
+    origin.pull()
+    return '', 200
 
 @app.route('/predict', methods=['POST'])
 def predict_budget_status():
