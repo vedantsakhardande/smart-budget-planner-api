@@ -58,6 +58,9 @@ def before_request():
     else:
         return  # Skip access token validation for the /login route   
 
+@app.route('/')
+def index():
+    return '', 200
 
 @app.route('/git_update', methods=['POST'])
 def git_update():
