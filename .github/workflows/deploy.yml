@@ -1,0 +1,25 @@
+name: Deploy to PythonAnywhere
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Install Git
+        run: sudo apt-get install -y git
+
+      - name: Deploy to PythonAnywhere
+        run: |
+          git remote add pythonanywhere https://git.pythonanywhere.com/vedanttest19/mysite.git
+          git push pythonanywhere main
+        env:
+          PA_USERNAME: ${{ secrets.PA_USERNAME }}
+          PA_PASSWORD: ${{ secrets.PA_PASSWORD }}
