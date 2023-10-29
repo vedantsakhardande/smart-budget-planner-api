@@ -8,6 +8,9 @@ from decouple import config
 from flasgger import Swagger
 import bcrypt
 import secrets
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
 
 app = Flask(__name__)
 swagger = Swagger(app)
@@ -31,7 +34,6 @@ db = mongo.get_database('smart-budget-planner')
 def validate_access_token(token):
     decoded_token = jwt.decode(token, options={"verify_signature": False})
         
-    print("Decoded token is :",decoded_token)
     # Extract the expiration timestamp from the decoded token (standard claim: 'exp')
     expiration_timestamp = decoded_token['exp']
     
@@ -41,21 +43,155 @@ def validate_access_token(token):
     # Compare with the current time (UTC)
     current_datetime = datetime.utcnow()
 
-    print("expiration_datetime", expiration_datetime)
-    print("datetime.utcnow()", datetime.utcnow())
     
     # If the token has not expired, return False; otherwise, return True
     return expiration_datetime > current_datetime
 
 @app.before_request
 def before_request():
-    if request.endpoint == 'login':
-        return  # Skip access token validation for the /login route
-    # Validate the access token for each request
+    if request.path == '/transactions' or request.path == '/predict':
+        # Validate the access token for each request
+        token = request.headers.get('Authorization').split(' ')[1]
+        if not validate_access_token(token):
+            return jsonify({"error": "Unauthorized"}), 401
+    else:
+        return  # Skip access token validation for the /login route   
+  
+
+@app.route('/predict', methods=['POST'])
+def predict_budget_status():
+    """
+    Predict Budget Status
+    ---
+    parameters:
+      - name: budget
+        in: formData
+        type: number
+        required: true
+        description: The user's budget for the current month.
+      - name: transactions
+        in: body
+        schema:
+          type: array
+          items:
+            type: object
+            properties:
+              Date:
+                type: string
+                format: date
+                example: "2023-10-05"
+              Amount:
+                type: number
+                example: 300
+        required: true
+        description: The user's current month's transactions.
+
+    responses:
+      200:
+        description: Budget status and difference.
+        schema:
+          type: object
+          properties:
+            budget_status:
+              type: string
+              description: The budget status (over budget/under budget).
+            budget_difference:
+              type: number
+              description: The budget difference.
+            model_accuracy_r_squared:
+              type: number
+              description: The R-squared value representing model accuracy.
+    """
+    # Use a regressor for forecasting
+    model = RandomForestRegressor()
+    # Get today's date
+    today = datetime.now().date()
+
+    # Calculate the date 3 months ago
+    one_year_ago = today - timedelta(days=365)
+
+    collection = db['transactions']
+    # Get the 'from' and 'to' date parameters from the query string
+    from_date = one_year_ago.strftime('%Y-%m-%d')
+    to_date = today.strftime('%Y-%m-%d')
+
+    # Convert 'from' and 'to' date strings to datetime objects and explicitly set them to UTC timezone
+    from_date = datetime.strptime(from_date, '%Y-%m-%d')
+    from_date = pytz.utc.localize(from_date)
+
+    # Adjust 'to_date' to include the end of the day (23:59:59.999999)
+    to_date = datetime.strptime(to_date, '%Y-%m-%d')
+    to_date = pytz.utc.localize(to_date).replace(hour=23, minute=59, second=59, microsecond=999999)
+
     token = request.headers.get('Authorization').split(' ')[1]
-    print("token is :",token)
-    if not validate_access_token(token):
-        return jsonify({"error": "Unauthorized"}), 401
+    decoded_token = jwt.decode(token, options={"verify_signature": False})
+    user_id = decoded_token.get('user_id')
+    # Define the query to filter transactions by date range
+    query = {"timestamp": {"$gte": from_date, "$lte": to_date}, "user_id": str(user_id)}
+
+    # Use the query to retrieve transactions in the specified date range
+    transactions_in_range = list(collection.find(query))
+    # Convert ObjectId fields to strings
+    transaction_dates = []
+    transaction_amounts = []
+    for transaction in transactions_in_range:
+        transaction['_id'] = str(transaction['_id'])
+        transaction_dates.append(transaction['timestamp'].strftime('%Y-%m-%d'))
+        transaction_amounts.append(transaction['amount'])
+
+
+    historical_data = pd.DataFrame({
+    'Date': transaction_dates,
+    'Amount': transaction_amounts
+    })
+    budget = request.json['budget']
+    current_month_data = pd.DataFrame(request.json['transactions'])
+    
+    current_month_data['Date'] = pd.to_datetime(current_month_data['Date'])
+    current_month_data['Month'] = current_month_data['Date'].dt.month
+
+    # Combine historical data and current month's data
+    all_data = pd.concat([historical_data, current_month_data], ignore_index=True)
+
+    # Feature engineering to extract month
+    all_data['Date'] = pd.to_datetime(all_data['Date'])
+    all_data['Month'] = all_data['Date'].dt.month
+
+    # Group by month and sum the amounts
+    monthly_total = all_data.groupby('Month')['Amount'].sum().reset_index()
+
+    # Use the monthly total for forecasting
+    X_train = monthly_total['Month'].values.reshape(-1, 1)
+    y_train = monthly_total['Amount']
+
+    model.fit(X_train, y_train)
+
+    # Predict the expected monthly total expenses for the current month
+    current_month = current_month_data['Month'].iloc[0]
+    expected_expenses = model.predict([[current_month]])[0]
+
+    # Calculate the budget difference based on monthly total expenses
+    budget_difference = budget - expected_expenses
+
+    # Determine budget status and budget difference message
+    if budget_difference < 0:
+        budget_status = "over budget"
+        budget_difference = abs(budget_difference)
+    else:
+        budget_status = "under budget"
+
+    # Calculate R-squared value as a measure of model accuracy
+    r_squared = r2_score(y_train, model.predict(X_train))
+
+    response = {
+        'budget_status': budget_status,
+        'budget_difference': budget_difference,
+        'model_accuracy_r_squared': r_squared
+    }
+
+    return jsonify(response)
+
+
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -66,6 +202,11 @@ def signup():
     tags:
       - Authentication
     parameters:
+      - name: name
+        in: formData
+        type: string
+        required: true
+        description: Name for the new user
       - name: username
         in: formData
         type: string
@@ -88,8 +229,12 @@ def signup():
         collection = db['users']
         
         # Get username and password from request body
+        name = request.json.get('name')
         username = request.json.get('username')
         password = request.json.get('password')
+
+        if name is None or username is None or password is None:
+          return jsonify({'error': 'Bad request - Missing attributes', 'status': 400}), 400
 
         # Check if the username already exists
         existing_user = collection.find_one({'username': username})
@@ -100,7 +245,7 @@ def signup():
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
         # Store the user's data in the database with the hashed password
-        user_data = {'username': username, 'password': hashed_password}
+        user_data = { 'name': name, 'username': username, 'password': hashed_password }
         collection.insert_one(user_data)
 
         return jsonify({'message': 'Signup successful', 'status': 201}), 201
@@ -150,9 +295,8 @@ def login():
                 # Set the expiration time for the JWT (24 hours from the current time)
                 expiration_time = datetime.utcnow() + timedelta(hours=24)
 
-                print("User is :",user)
                 # Create a JWT containing the username and an "exp" (expiration) claim
-                access_token = jwt.encode({'username': username, 'name': user.get('name'), 'exp': expiration_time}, 'your_secret_key', algorithm='HS256')
+                access_token = jwt.encode({'username': username, 'user_id': str(user.get('_id')), 'name': user.get('name'), 'exp': expiration_time}, 'your_secret_key', algorithm='HS256')
 
                 # Return the access token in the response
                 return jsonify({"access_token": access_token, "message": "Login successful"}), 200
@@ -211,6 +355,9 @@ def get_transactions():
         description: Internal Server Error.
     """
     try:
+        token = request.headers.get('Authorization').split(' ')[1]
+        decoded_token = jwt.decode(token, options={"verify_signature": False})
+        user_id = decoded_token.get('user_id')
         collection = db['transactions']
         # Get the 'from' and 'to' date parameters from the query string
         from_date = request.args.get('from')
@@ -225,7 +372,7 @@ def get_transactions():
         to_date = pytz.utc.localize(to_date).replace(hour=23, minute=59, second=59, microsecond=999999)
 
         # Define the query to filter transactions by date range
-        query = {"timestamp": {"$gte": from_date, "$lte": to_date}}
+        query = {"timestamp": {"$gte": from_date, "$lte": to_date}, "user_id": user_id}
 
         # Use the query to retrieve transactions in the specified date range
         transactions_in_range = list(collection.find(query))
@@ -273,10 +420,14 @@ def create_transaction():
         description: Internal Server Error.
     """
     try:
+        token = request.headers.get('Authorization').split(' ')[1]
+        decoded_token = jwt.decode(token, options={"verify_signature": False})
+        user_id = decoded_token.get('user_id')
         collection = db['transactions']
         # Get the transaction data from the request JSON
         transaction_data = request.get_json()
         transaction_data['timestamp'] = datetime.now()
+        transaction_data['user_id'] = user_id
 
         # Insert the new transaction into the collection
         result = collection.insert_one(transaction_data)
