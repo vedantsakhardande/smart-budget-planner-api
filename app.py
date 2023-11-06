@@ -179,10 +179,10 @@ def predict_budget_status():
 
     # Determine budget status and budget difference message
     if budget_difference < 0:
-        budget_status = "over budget"
+        budget_status = "Over Budget"
         budget_difference = abs(budget_difference)
     else:
-        budget_status = "under budget"
+        budget_status = "Under Budget"
 
     # Calculate R-squared value as a measure of model accuracy
     r_squared = r2_score(y_train, model.predict(X_train))
