@@ -1,5 +1,6 @@
 import os
 import jwt
+from bson import ObjectId
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
 from datetime import datetime, timedelta
@@ -23,8 +24,6 @@ app.config['cluster_uri'] = config('CLUSTER_URI')
 
 # Replace 'YOUR_CONNECTION_URI' with your MongoDB Atlas connection string
 app.config['MONGO_URI'] = "mongodb+srv://{}:{}@{}/?retryWrites=true&w=majority".format(app.config['cluster_username'], app.config['cluster_password'], app.config['cluster_uri'])
-
-'mongodb+srv://mongocluster:mongocluster@mongocluster.rj9zaak.mongodb.net/?retryWrites=true&w=majority'
 
 # Initialize PyMongo
 mongo = MongoClient(app.config['MONGO_URI'])
@@ -67,6 +66,8 @@ def predict_budget_status():
     """
     Predict Budget Status
     ---
+    tags:
+      - Budget
     parameters:
       - name: budget
         in: formData
@@ -231,7 +232,7 @@ def signup():
     """
     try:
         collection = db['users']
-        
+
         # Get username and password from request body
         name = request.json.get('name')
         username = request.json.get('username')
@@ -248,8 +249,8 @@ def signup():
         # Hash the password using bcrypt
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
-        # Store the user's data in the database with the hashed password
-        user_data = { 'name': name, 'username': username, 'password': hashed_password }
+        # Store the user's data in the database with the hashed password and default budget
+        user_data = { 'name': name, 'username': username, 'password': hashed_password, 'budget': 1000 }
         collection.insert_one(user_data)
 
         return jsonify({'message': 'Signup successful', 'status': 201}), 201
@@ -313,6 +314,47 @@ def login():
 
 
 
+@app.route('/user/budget', methods=['PATCH'])
+def update_user_budget():
+    """
+    Update user's budget.
+
+    ---
+    tags:
+      - User
+    parameters:
+      - name: budget
+        in: formData
+        type: number
+        required: true
+        description: The user's budget for the current month.
+    responses:
+      200:
+        description: Budget updated successfully.
+      500:
+        description: Internal Server Error.
+    """
+    try:
+        token = request.headers.get('Authorization').split(' ')[1]
+        decoded_token = jwt.decode(token, options={"verify_signature": False})
+        user_id = decoded_token.get('user_id')
+        collection = db['users']
+        # Get the budget data from the request form
+        budget = float(request.json.get('budget'))
+        print("User id is :",user_id)
+
+        # Update the user's budget in the collection
+        result = collection.update_one({'_id': ObjectId(user_id)}, {'$set': {'budget': budget}})
+        print("Result is :",result)
+
+        if result.modified_count == 1:
+            return jsonify({"message": "Budget updated successfully"}), 200
+        else:
+            return jsonify({"message": "No changes made"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/transactions', methods=['GET'])
 def get_transactions():
     """
@@ -363,6 +405,7 @@ def get_transactions():
         decoded_token = jwt.decode(token, options={"verify_signature": False})
         user_id = decoded_token.get('user_id')
         collection = db['transactions']
+        user_collection = db['users']
         # Get the 'from' and 'to' date parameters from the query string
         from_date = request.args.get('from')
         to_date = request.args.get('to')
@@ -380,11 +423,13 @@ def get_transactions():
 
         # Use the query to retrieve transactions in the specified date range
         transactions_in_range = list(collection.find(query))
+        
+        user = user_collection.find_one({'username': decoded_token.get('username')})
         # Convert ObjectId fields to strings
         for transaction in transactions_in_range:
             transaction['_id'] = str(transaction['_id'])
 
-        return jsonify({"transactions": transactions_in_range})
+        return jsonify({"transactions": transactions_in_range, "budget": user.get("budget")})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
