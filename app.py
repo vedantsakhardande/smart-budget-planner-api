@@ -144,7 +144,15 @@ def predict_budget_status():
         transaction_dates.append(transaction['timestamp'].strftime('%Y-%m-%d'))
         transaction_amounts.append(transaction['amount'])
 
+    if(len(transaction_dates) == 0):
+        response = {
+        'budget_status': "No Data Available",
+        'budget_difference': 0,
+        'model_accuracy_r_squared': "NA"
+        }
 
+        return jsonify(response)
+        
     historical_data = pd.DataFrame({
     'Date': transaction_dates,
     'Amount': transaction_amounts
